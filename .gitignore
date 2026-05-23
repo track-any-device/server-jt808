@@ -1,0 +1,24 @@
+# Environment & secrets
+.env
+*.env.local
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Go build artifacts
+/jt808-server
+*.exe
+*.test
+*.out
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker
+*.pid

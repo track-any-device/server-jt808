@@ -1,0 +1,157 @@
+# JT808 stack — server + P901 device simulator + Redis (+ optional MySQL)
+#
+# Usage:
+#   docker compose up --build              # all services (no DB)
+#   docker compose up --build -d           # detached
+#   docker compose --profile db up --build # include MySQL
+#   docker compose logs -f jt808           # server logs
+#   docker compose logs -f p901            # device simulator logs
+#   docker compose down -v                 # stop and wipe volumes
+
+services:
+
+  # ── JT808 server ────────────────────────────────────────────────────────────
+  jt808:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: jt808-server:local
+    restart: unless-stopped
+    ports:
+      - "${JT808_TCP_PORT:-7018}:7018"
+      - "${JT808_HTTP_PORT:-9090}:9090"
+    environment:
+      JT808_TCP_ADDR:   ":7018"
+      JT808_HTTP_ADDR:  ":9090"
+      # Redis
+      REDIS_HOST:       redis
+      REDIS_PORT:       "6379"
+      REDIS_PASSWORD:   "${REDIS_PASSWORD:-}"
+      REDIS_JT808_DB:   "${REDIS_JT808_DB:-0}"
+      REDIS_POOL_SIZE:  "${REDIS_POOL_SIZE:-100}"
+      # Stream
+      STREAM_KEY:       "${STREAM_KEY:-jt808:telemetry}"
+      STREAM_MAX_LEN:   "${STREAM_MAX_LEN:-100000}"
+      # DB (disabled by default — set DB_HOST to enable)
+      DB_ENABLED:       "${DB_ENABLED:-false}"
+      DB_HOST:          "${DB_HOST:-}"
+      DB_PORT:          "${DB_PORT:-3306}"
+      DB_USERNAME:      "${DB_USERNAME:-laravel}"
+      DB_PASSWORD:      "${DB_PASSWORD:-secret}"
+      DB_DATABASE:      "${DB_DATABASE:-laravel}"
+      DB_DEVICE_TYPE_ID: "${DB_DEVICE_TYPE_ID:-1}"
+      # Configurable table / column names
+      DB_DEVICES_TABLE:    "${DB_DEVICES_TABLE:-devices}"
+      DB_IMEI_COLUMN:      "${DB_IMEI_COLUMN:-imei}"
+      DB_APPROVED_COLUMN:  "${DB_APPROVED_COLUMN:-is_approved}"
+      DB_STATUS_COLUMN:    "${DB_STATUS_COLUMN:-status}"
+      DB_TYPE_ID_COLUMN:   "${DB_TYPE_ID_COLUMN:-device_type_id}"
+      DB_NAME_COLUMN:      "${DB_NAME_COLUMN:-name}"
+      DB_NOTES_COLUMN:     "${DB_NOTES_COLUMN:-notes}"
+      # Timing
+      AUTH_TIMEOUT:     "${AUTH_TIMEOUT:-30s}"
+      HEARTBEAT_TIMEOUT: "${HEARTBEAT_TIMEOUT:-3m}"
+      WRITE_TIMEOUT:    "${WRITE_TIMEOUT:-10s}"
+      APP_DEBUG:        "${APP_DEBUG:-true}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - fleet_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ── P901 device simulator ────────────────────────────────────────────────────
+  p901:
+    build:
+      context: .
+      dockerfile: device/p901/Dockerfile
+    image: p901-device:local
+    restart: unless-stopped
+    environment:
+      DEVICE_IMEI:         "${DEVICE_IMEI:-013987654321}"
+      SERVER_ADDR:         "jt808:7018"
+      LOCATION_INTERVAL:   "${LOCATION_INTERVAL:-3s}"
+      HEARTBEAT_INTERVAL:  "${HEARTBEAT_INTERVAL:-6s}"
+      DEVICE_MODEL:        "${DEVICE_MODEL:-P901}"
+      INITIAL_LAT:         "${INITIAL_LAT:-31.5204}"
+      INITIAL_LON:         "${INITIAL_LON:-74.3587}"
+      INITIAL_HEADING:     "${INITIAL_HEADING:-45}"
+      INITIAL_SPEED:       "${INITIAL_SPEED:-40}"
+      INITIAL_BATTERY:     "${INITIAL_BATTERY:-100}"
+      APP_DEBUG:           "${APP_DEBUG:-true}"
+    volumes:
+      - p901_state:/data
+    depends_on:
+      jt808:
+        condition: service_healthy
+    networks:
+      - fleet_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Redis ────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel notice
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_EXPOSE_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - fleet_net
+
+  # ── MySQL (optional — enable with: docker compose --profile db up) ─────────
+  mysql:
+    image: mysql:8.0
+    profiles: ["db"]
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD:-rootsecret}"
+      MYSQL_DATABASE:      "${DB_DATABASE:-laravel}"
+      MYSQL_USER:          "${DB_USERNAME:-laravel}"
+      MYSQL_PASSWORD:      "${DB_PASSWORD:-secret}"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "${MYSQL_EXPOSE_PORT:-3306}:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost",
+             "-u", "${DB_USERNAME:-laravel}", "-p${DB_PASSWORD:-secret}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - fleet_net
+
+volumes:
+  redis_data:
+  mysql_data:
+  p901_state:
+
+networks:
+  fleet_net:
+    driver: bridge

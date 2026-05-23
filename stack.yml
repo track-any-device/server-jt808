@@ -1,0 +1,126 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# JT808 GPS Server — Docker Swarm Stack
+#
+# Deploy:
+#   docker stack deploy -c jt808-server/stack.yml jt808
+#
+# ─── Critical networking decision: host vs ingress mode ──────────────────────
+#
+# Docker Swarm has two port publishing modes:
+#
+#   ingress (default): Swarm's IPVS load balancer terminates the TCP connection
+#     at the routing mesh, then opens a NEW connection to the backend container.
+#     - Good for HTTP: stateless, short-lived connections.
+#     - BAD for JT808: devices hold persistent TCP connections for hours.
+#       The routing mesh does NOT guarantee the same backend on reconnect.
+#       A device's reconnect could land on a replica that doesn't hold its
+#       session → it must re-authenticate → ~3 seconds of packet loss.
+#       At 10k devices reconnecting after a rolling update, this is a thundering
+#       herd of re-auths that hammers Redis.
+#
+#   host: Publishes the port directly on the Swarm node's network interface.
+#     - Good for JT808: connection goes directly to the container; no IPVS hop.
+#     - Device reconnects hit the same IP (same node) if you use DNS/anycast.
+#     - Requires mode: global (one replica per node) OR careful placement.
+#     - Only one container per port per host.
+#
+# RECOMMENDATION for JT808:
+#   Use host mode + global deployment (one replica per Swarm node).
+#   Put an external TCP load balancer (HAProxy / AWS NLB) in front with
+#   source-IP hash. This routes each device consistently to the same node.
+#   When a node fails, devices reconnect to another node and re-authenticate
+#   once (Redis has their auth token).
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+version: "3.9"
+
+services:
+  jt808:
+    image: ${REGISTRY:-docker.io}/${IMAGE_PREFIX:-fleet-tracking}-jt808:${TAG:-latest}
+
+    # ── Networking ────────────────────────────────────────────────────────────
+    ports:
+      - target: 7018
+        published: 7018
+        protocol: tcp
+        mode: host        # CRITICAL: do NOT use 'ingress' for long-lived TCP
+
+      # Observability HTTP stays on ingress (stateless, internal only).
+      - target: 9090
+        published: 9090
+        protocol: tcp
+        mode: ingress
+
+    # ── Deployment ────────────────────────────────────────────────────────────
+    deploy:
+      mode: global        # one replica per Swarm node (matches host port semantics)
+
+      placement:
+        constraints:
+          # Label tracker nodes: docker node update --label-add jt808=true <node-id>
+          - node.labels.jt808 == true
+
+      update_config:
+        parallelism: 1
+        delay: 30s        # devices reconnect gracefully between node updates
+        failure_action: rollback
+        order: start-first
+        monitor: 15s
+
+      rollback_config:
+        parallelism: 1
+        delay: 10s
+
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 5
+        window: 120s
+
+      # Resource sizing guide:
+      #   10k idle connections:              ~200 MB RAM, ~0.5 CPU
+      #   10k active reporting (1 msg/30s):  ~400 MB RAM, ~2.0 CPU
+      #   100k connections (multiple nodes): scale nodes, not replicas per node
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "512M"
+        reservations:
+          cpus: "0.25"
+          memory: "128M"
+
+    environment:
+      - JT808_TCP_ADDR=:7018
+      - JT808_HTTP_ADDR=:9090
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_JT808_DB=2
+      - REDIS_POOL_SIZE=100
+      - STREAM_KEY=jt808:telemetry
+      - AUTH_TIMEOUT=30s
+      - HEARTBEAT_TIMEOUT=3m
+      - WRITE_TIMEOUT=10s
+      - APP_DEBUG=${APP_DEBUG:-false}
+
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - fleet_net
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+networks:
+  fleet_net:
+    external: true
+    name: suthra_punjab_fleet_tracking_suthra_punjab_fleet

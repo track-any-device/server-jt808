@@ -1,0 +1,188 @@
+# Build both Docker images and publish them to Docker Hub.
+#
+# Images published:
+#   $DOCKERHUB_USERNAME/jt808-server   — JT808 TCP server
+#   $DOCKERHUB_USERNAME/p901-device    — P901 GPS device simulator
+#
+# Triggers:
+#   push → main     Auto-bumps VERSION (patch), updates README, pushes
+#                   both images as :<version> + :latest
+#   tag  v*.*.*     Uses the tag as the version; pushes all semver variants
+#                   (:1.2.3, :1.2, :1, :latest) and updates README
+#   pull_request    Build-only smoke test — nothing pushed, nothing bumped
+#
+# Required secrets  (Settings → Secrets → Actions):
+#   DOCKERHUB_USERNAME   Docker Hub username
+#   DOCKERHUB_TOKEN      Docker Hub access token (read/write)
+#
+# The workflow commits back to main with "[skip ci]" so it does not loop.
+# GITHUB_TOKEN needs Contents: write — granted below in permissions.
+
+name: Build & Publish
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  release:
+    name: Version · Build · Push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to commit VERSION + README back to main
+      packages: write
+
+    steps:
+      # ── Checkout ───────────────────────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Use the default GITHUB_TOKEN; Contents:write is granted above.
+          # fetch-depth 0 is needed so git log works for the bump commit.
+          fetch-depth: 0
+
+      # ── Auto-bump patch version (main push only) ───────────────────────────
+      - name: Bump patch version
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        id: bump
+        run: |
+          current=$(cat VERSION | tr -d '[:space:]')
+          IFS='.' read -r major minor patch <<< "$current"
+          patch=$((patch + 1))
+          new_version="${major}.${minor}.${patch}"
+          echo "$new_version" > VERSION
+          echo "version=${new_version}" >> "$GITHUB_OUTPUT"
+          echo "Bumped ${current} → ${new_version}"
+
+      # ── Update README version table (main push + tag) ─────────────────────
+      - name: Update README versions
+        if: github.event_name == 'push'
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION=$(cat VERSION | tr -d '[:space:]')
+          fi
+
+          USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
+
+          # Replace everything between the marker comments in README.md
+          perl -i -0pe "
+            s{<!-- VERSIONS_START -->.*?<!-- VERSIONS_END -->}
+             {<!-- VERSIONS_START -->\n| Image | Latest | Pull |\n|-------|--------|------|\n| \`jt808-server\` | \`v${VERSION}\` | \`docker pull ${USERNAME}/jt808-server:${VERSION}\` |\n| \`p901-device\`  | \`v${VERSION}\` | \`docker pull ${USERNAME}/p901-device:${VERSION}\`  |\n<!-- VERSIONS_END -->}s
+          " README.md
+
+          echo "README updated to v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        id: readme
+
+      # ── Commit VERSION + README back to main ──────────────────────────────
+      - name: Commit version files
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION README.md
+          # Only commit if there are staged changes
+          git diff --staged --quiet || \
+            git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]"
+          git push
+
+      # ── Determine final version string for Docker tags ─────────────────────
+      - name: Resolve version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          elif [[ "${GITHUB_REF}" == refs/heads/main ]]; then
+            echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+          else
+            # PR — use pr-<number> as a label (not pushed anyway)
+            echo "version=pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Docker setup ────────────────────────────────────────────────────────
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # ── Image metadata ─── jt808-server ────────────────────────────────────
+      - name: Metadata — jt808-server
+        id: meta-server
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/jt808-server
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=pr
+
+      # ── Image metadata ─── p901-device ─────────────────────────────────────
+      - name: Metadata — p901-device
+        id: meta-p901
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/p901-device
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=${{ steps.ver.outputs.version }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/') }}
+            type=ref,event=pr
+
+      # ── Build & push ─── jt808-server ──────────────────────────────────────
+      - name: Build & push — jt808-server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: server/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-server.outputs.tags }}
+          labels: ${{ steps.meta-server.outputs.labels }}
+          cache-from: type=gha,scope=jt808-server
+          cache-to:   type=gha,scope=jt808-server,mode=max
+
+      # ── Build & push ─── p901-device ───────────────────────────────────────
+      - name: Build & push — p901-device
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: device/p901/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-p901.outputs.tags }}
+          labels: ${{ steps.meta-p901.outputs.labels }}
+          cache-from: type=gha,scope=p901-device
+          cache-to:   type=gha,scope=p901-device,mode=max
+
+      # ── Job summary ─────────────────────────────────────────────────────────
+      - name: Summary
+        if: github.event_name != 'pull_request'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          USERNAME="${{ secrets.DOCKERHUB_USERNAME }}"
+          {
+            echo "### Published v${VERSION}"
+            echo ""
+            echo "| Image | Tags |"
+            echo "|-------|------|"
+            echo "| \`${USERNAME}/jt808-server\` | $(echo '${{ steps.meta-server.outputs.tags }}' | tr '\n' ' ') |"
+            echo "| \`${USERNAME}/p901-device\`  | $(echo '${{ steps.meta-p901.outputs.tags }}' | tr '\n' ' ') |"
+          } >> "$GITHUB_STEP_SUMMARY"
