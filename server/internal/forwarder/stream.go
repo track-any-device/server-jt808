@@ -48,8 +48,6 @@ func (s *Stream) PublishLocation(ctx context.Context, phone string, loc *protoco
 		"event":        "location",
 		"phone":        phone,
 		"timestamp":    loc.Timestamp,
-		"latitude":     loc.Latitude,
-		"longitude":    loc.Longitude,
 		"altitude":     loc.Altitude,
 		"speed":        loc.Speed,
 		"direction":    loc.Direction,
@@ -58,6 +56,13 @@ func (s *Stream) PublishLocation(ctx context.Context, phone string, loc *protoco
 		"alarm_flags":  loc.AlarmFlags,
 		"status_flags": loc.StatusFlags,
 		"published_at": time.Now().UnixMilli(),
+	}
+
+	// Only include coordinates when the device has a valid GPS fix.
+	// Without a fix the device sends 0,0 which would corrupt the last-known location snapshot.
+	if loc.GPSFixed {
+		values["latitude"] = loc.Latitude
+		values["longitude"] = loc.Longitude
 	}
 
 	if battery := extractBattery(loc.Extras); battery >= 0 {
@@ -96,6 +101,7 @@ func (s *Stream) PublishLocation(ctx context.Context, phone string, loc *protoco
 		s.log.Info("location published",
 			zap.String("phone", phone),
 			zap.String("stream_id", id),
+			zap.Bool("gps_fixed", loc.GPSFixed),
 			zap.Float64("latitude", loc.Latitude),
 			zap.Float64("longitude", loc.Longitude),
 			zap.Float64("speed_kmh", loc.Speed),
