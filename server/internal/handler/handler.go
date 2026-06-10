@@ -77,6 +77,23 @@ func (h *Handler) Dispatch(ctx context.Context, s *session.Session, f *protocol.
 			zap.String("phone", s.Phone),
 			zap.String("body_hex", fmt.Sprintf("%X", f.Body)),
 		)
+	case protocol.MsgUpgradeResult:
+		// Device sends this at startup to confirm no pending firmware upgrade.
+		// Empty body is normal; non-empty body encodes upgrade type + result code.
+		s.ACK(f, protocol.ResultOK, h.cfg.WriteTimeout) //nolint:errcheck
+		h.log.Debug("upgrade result notification",
+			zap.String("phone", s.Phone),
+			zap.String("body_hex", fmt.Sprintf("%X", f.Body)),
+		)
+	case protocol.MsgACCStatusReport:
+		// Concox GXX dialect: device reports ACC/ignition state at startup.
+		// Body byte 0: 0x00 = ACC off, 0x01 = ACC on.
+		s.ACK(f, protocol.ResultOK, h.cfg.WriteTimeout) //nolint:errcheck
+		accOn := len(f.Body) > 0 && f.Body[0] == 0x01
+		h.log.Debug("ACC status report",
+			zap.String("phone", s.Phone),
+			zap.Bool("acc_on", accOn),
+		)
 	default:
 		h.log.Info("unhandled message",
 			zap.String("phone", s.Phone),
@@ -285,6 +302,10 @@ func msgName(id uint16) string {
 		return "terminal_resp"
 	case protocol.MsgTerminalProps:
 		return "terminal_props"
+	case protocol.MsgUpgradeResult:
+		return "upgrade_result"
+	case protocol.MsgACCStatusReport:
+		return "acc_status"
 	default:
 		return "unknown"
 	}

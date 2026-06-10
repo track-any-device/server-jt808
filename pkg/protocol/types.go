@@ -6,9 +6,11 @@ const (
 	MsgHeartbeat      uint16 = 0x0002 // keepalive, empty body
 	MsgRegistration   uint16 = 0x0100 // device registers; server issues auth token
 	MsgAuthentication uint16 = 0x0102 // device authenticates with token
-	MsgTerminalProps  uint16 = 0x0120 // terminal properties report (JT808-2017 extension)
-	MsgLocationReport uint16 = 0x0200 // single GPS fix
-	MsgBatchLocation  uint16 = 0x0704 // multiple GPS fixes in one packet
+	MsgTerminalProps   uint16 = 0x0120 // terminal properties report (JT808-2017 extension)
+	MsgUpgradeResult   uint16 = 0x0121 // terminal upgrade / control result notification (sent at startup; empty body = none pending)
+	MsgACCStatusReport uint16 = 0x0304 // ACC/relay status report (Concox dialect; body[0]: 0x00=off 0x01=on)
+	MsgLocationReport  uint16 = 0x0200 // single GPS fix
+	MsgBatchLocation   uint16 = 0x0704 // multiple GPS fixes in one packet
 )
 
 // JT808 message IDs (platform → terminal direction)
