@@ -77,7 +77,10 @@ func (s *DeviceStore) CheckOrCreate(ctx context.Context, imei, model, deviceID s
 	}
 
 	// Device not found — auto-create in pending-approval state.
-	name := fmt.Sprintf("JT808 %s", imei)
+	name := deviceID
+	if name == "" {
+		name = imei
+	}
 	notes := fmt.Sprintf("Auto-registered via JT808. Model: %s  DeviceID: %s", model, deviceID)
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 
