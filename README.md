@@ -6,8 +6,8 @@ Devices connect over a persistent TCP socket; the server decodes frames, validat
 <!-- VERSIONS_START -->
 | Image | Latest | Pull |
 |-------|--------|------|
-| `jt808-server` | `v0.1.6` | `docker pull trackanydevice/jt808-server:0.1.6` |
-| `p901-device`  | `v0.1.6` | `docker pull trackanydevice/p901-device:0.1.6`  |
+| `jt808-server` | `v0.1.7` | `docker pull trackanydevice/jt808-server:0.1.7` |
+| `p901-device`  | `v0.1.7` | `docker pull trackanydevice/p901-device:0.1.7`  |
 <!-- VERSIONS_END -->
 
 ---
