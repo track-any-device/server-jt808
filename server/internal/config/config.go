@@ -47,7 +47,7 @@ type Config struct {
 	// existing Laravel (or other) schema without migration.
 	DBDevicesTable    string // DB_DEVICES_TABLE      default "devices"
 	DBIMEIColumn      string // DB_IMEI_COLUMN         default "imei"
-	DBApprovedColumn  string // DB_APPROVED_COLUMN     default "is_approved"
+	DBBroadcastColumn string // DB_BROADCAST_COLUMN    default "broadcast_id"
 	DBStatusColumn    string // DB_STATUS_COLUMN       default "status"
 	DBTypeIDColumn    string // DB_TYPE_ID_COLUMN      default "device_type_id"
 	DBNameColumn      string // DB_NAME_COLUMN         default "name"
@@ -105,7 +105,7 @@ func Load() *Config {
 
 		DBDevicesTable:    envStr("DB_DEVICES_TABLE", "devices"),
 		DBIMEIColumn:      envStr("DB_IMEI_COLUMN", "imei"),
-		DBApprovedColumn:  envStr("DB_APPROVED_COLUMN", "is_approved"),
+		DBBroadcastColumn: envStr("DB_BROADCAST_COLUMN", "broadcast_id"),
 		DBStatusColumn:    envStr("DB_STATUS_COLUMN", "status"),
 		DBTypeIDColumn:    envStr("DB_TYPE_ID_COLUMN", "device_type_id"),
 		DBNameColumn:      envStr("DB_NAME_COLUMN", "name"),

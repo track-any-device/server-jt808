@@ -139,20 +139,17 @@ func (h *Handler) handleRegistration(ctx context.Context, s *session.Session, f 
 	}
 
 	switch result {
-	case store.CheckAutoCreated:
-		h.log.Warn("unknown device auto-created — pending admin approval, rejecting",
-			zap.String("imei", f.Phone))
+	case store.CheckBlocked:
+		h.log.Warn("device blocked — rejecting", zap.String("broadcast_id", f.Phone))
 		body := protocol.BuildRegistrationACK(f.SeqNum, protocol.RegTerminalNotInDB, "")
 		s.Send(protocol.MsgRegistrationResp, body, h.cfg.WriteTimeout) //nolint:errcheck
 		time.AfterFunc(200*time.Millisecond, s.Close)
 		return
 
-	case store.CheckNotApproved:
-		h.log.Warn("device not approved — rejecting", zap.String("imei", f.Phone))
-		body := protocol.BuildRegistrationACK(f.SeqNum, protocol.RegTerminalNotInDB, "")
-		s.Send(protocol.MsgRegistrationResp, body, h.cfg.WriteTimeout) //nolint:errcheck
-		time.AfterFunc(200*time.Millisecond, s.Close)
-		return
+	case store.CheckAutoCreated:
+		// New device: registered as pending (broadcast id only). Allow it to connect so
+		// realtime broadcasts flow; package-jt808 skips signal storage until activated.
+		h.log.Info("new device auto-created as pending — allowing", zap.String("broadcast_id", f.Phone))
 	}
 
 	s.Phone = f.Phone
