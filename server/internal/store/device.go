@@ -112,3 +112,22 @@ func (s *DeviceStore) CheckOrCreate(ctx context.Context, broadcastID, model, dev
 	)
 	return CheckAutoCreated, nil
 }
+
+// RecordHeartbeat stamps the device's last heartbeat and the gap (seconds) since the
+// previous beat — its current "heart rate". No-op in DB-less mode (nil receiver).
+func (s *DeviceStore) RecordHeartbeat(ctx context.Context, broadcastID string) {
+	if s == nil {
+		return
+	}
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s
+		SET heartbeat_interval_s = CASE WHEN last_heartbeat_at IS NULL THEN heartbeat_interval_s
+		                                ELSE TIMESTAMPDIFF(SECOND, last_heartbeat_at, UTC_TIMESTAMP()) END,
+		    last_heartbeat_at = UTC_TIMESTAMP(),
+		    last_seen_at = UTC_TIMESTAMP()
+		WHERE %s = ?
+	`, s.cfg.DBDevicesTable, s.cfg.DBBroadcastColumn), broadcastID)
+	if err != nil {
+		s.log.Debug("heartbeat update failed", zap.String("broadcast_id", broadcastID), zap.Error(err))
+	}
+}
