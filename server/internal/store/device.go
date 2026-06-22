@@ -43,69 +43,71 @@ func (s *DeviceStore) Ping(ctx context.Context) error {
 type CheckResult int
 
 const (
-	CheckApproved    CheckResult = iota // device exists and approved column = true
-	CheckNotApproved                    // device exists but not approved
-	CheckAutoCreated                    // device was just inserted (not approved)
+	CheckApproved    CheckResult = iota // device exists and is not blocked → allow
+	CheckBlocked                        // device exists but status = blocked → reject
+	CheckAutoCreated                    // device was just inserted as pending → allow (approved=false)
 )
 
-// CheckOrCreate looks up the device by IMEI.
+// CheckOrCreate looks up the device by its broadcast id (the id the device
+// emits on connect). A new device is auto-created as `pending` (only the
+// broadcast id is known at this point) and allowed to connect; a device whose
+// status is `blocked` is rejected. Everything else (pending/active) is allowed.
 //
 // If s is nil (DB disabled) every device is treated as approved.
-func (s *DeviceStore) CheckOrCreate(ctx context.Context, imei, model, deviceID string) (CheckResult, error) {
+func (s *DeviceStore) CheckOrCreate(ctx context.Context, broadcastID, model, deviceID string) (CheckResult, error) {
 	if s == nil {
 		return CheckApproved, nil
 	}
 
-	var isApproved bool
+	var status string
 	err := s.db.QueryRowContext(ctx,
 		fmt.Sprintf(`SELECT %s FROM %s WHERE %s = ? LIMIT 1`,
-			s.cfg.DBApprovedColumn,
+			s.cfg.DBStatusColumn,
 			s.cfg.DBDevicesTable,
-			s.cfg.DBIMEIColumn,
-		), imei,
-	).Scan(&isApproved)
+			s.cfg.DBBroadcastColumn,
+		), broadcastID,
+	).Scan(&status)
 
 	if err == nil {
-		if isApproved {
-			return CheckApproved, nil
+		if status == "blocked" {
+			return CheckBlocked, nil
 		}
-		return CheckNotApproved, nil
+		return CheckApproved, nil
 	}
 
 	if err != sql.ErrNoRows {
-		return CheckNotApproved, fmt.Errorf("store: lookup imei %s: %w", imei, err)
+		return CheckBlocked, fmt.Errorf("store: lookup broadcast_id %s: %w", broadcastID, err)
 	}
 
-	// Device not found — auto-create in pending-approval state.
+	// Device not found — auto-create as pending (only the broadcast id is known).
 	name := deviceID
 	if name == "" {
-		name = imei
+		name = broadcastID
 	}
 	notes := fmt.Sprintf("Auto-registered via JT808. Model: %s  DeviceID: %s", model, deviceID)
 	now := time.Now().UTC().Format("2006-01-02 15:04:05")
 
 	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
 		INSERT INTO %s
-			(%s, %s, %s, %s, %s, %s, %s, %s)
+			(%s, %s, %s, %s, %s, %s, %s)
 		VALUES
-			(?, ?, ?, 'inventory', 0, ?, ?, ?)
+			(?, ?, ?, 'pending', ?, ?, ?)
 	`,
 		s.cfg.DBDevicesTable,
 		s.cfg.DBTypeIDColumn,
-		s.cfg.DBIMEIColumn,
+		s.cfg.DBBroadcastColumn,
 		s.cfg.DBNameColumn,
 		s.cfg.DBStatusColumn,
-		s.cfg.DBApprovedColumn,
 		s.cfg.DBNotesColumn,
 		s.cfg.DBCreatedAtColumn,
 		s.cfg.DBUpdatedAtColumn,
-	), s.cfg.DBDeviceTypeID, imei, name, notes, now, now)
+	), s.cfg.DBDeviceTypeID, broadcastID, name, notes, now, now)
 	if err != nil {
-		return CheckNotApproved, fmt.Errorf("store: auto-create imei %s: %w", imei, err)
+		return CheckBlocked, fmt.Errorf("store: auto-create broadcast_id %s: %w", broadcastID, err)
 	}
 
-	s.log.Info("device auto-created — pending approval",
-		zap.String("imei", imei),
+	s.log.Info("device auto-created — pending",
+		zap.String("broadcast_id", broadcastID),
 		zap.String("model", model),
 	)
 	return CheckAutoCreated, nil
