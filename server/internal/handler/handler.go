@@ -112,6 +112,8 @@ func (h *Handler) handleHeartbeat(ctx context.Context, s *session.Session, f *pr
 	}
 	h.metrics.Heartbeats.Inc()
 	h.devices.RecordHeartbeat(ctx, s.Phone)
+	// Keep-alive event → consumer forwards "device alive" for REST/MQTT tenants (no-op otherwise).
+	go h.fwd.PublishEvent(ctx, "heartbeat", s.Phone, map[string]any{})
 	h.log.Debug("heartbeat", zap.String("phone", s.Phone), zap.String("addr", s.RemoteAddr()))
 }
 
